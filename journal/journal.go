@@ -2,6 +2,7 @@ package journal
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -39,6 +40,7 @@ var (
 	username string
 	pid      string
 	loglevel int
+	ErrInval error = errors.New("invalid argument")
 )
 
 func init() {
@@ -65,7 +67,7 @@ func init() {
 
 func SetLogLevel(priority int) error {
 	if priority < LOG_EMERG || priority > LOG_DEBUG {
-		return fmt.Errorf("journal: invalid priority")
+		return ErrInval
 	} else {
 		loglevel = priority
 		return nil
@@ -74,7 +76,7 @@ func SetLogLevel(priority int) error {
 
 func priorityEnabled(priority int) (bool, error) {
 	if priority < LOG_EMERG || priority > LOG_DEBUG {
-		return false, fmt.Errorf("journal: invalid priority")
+		return false, ErrInval
 	}
 
 	if priority <= loglevel {
@@ -103,7 +105,7 @@ func getPriorityStr(priority int) (string, error) {
 	case LOG_DEBUG:
 		return "DEBUG", nil
 	default:
-		return "", fmt.Errorf("journal: invalid priority")
+		return "", ErrInval
 	}
 }
 
