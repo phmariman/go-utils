@@ -33,6 +33,21 @@ const (
 	zmtpStateError
 )
 
+var (
+	EBUSY = errors.New(syscall.EBUSY.Error())
+	ECONNREFUSED = errors.New(syscall.ECONNREFUSED.Error())
+	EINVAL = errors.New(syscall.EINVAL.Error())
+	EIO = errors.New(syscall.EIO.Error())
+	EMSGSIZE = errors.New(syscall.EMSGSIZE.Error())
+	ENOBUFS = errors.New(syscall.ENOBUFS.Error())
+	ENOLINK = errors.New(syscall.ENOLINK.Error())
+	ENOTCONN = errors.New(syscall.ENOTCONN.Error())
+	ENOTSUP = errors.New(syscall.ENOTSUP.Error())
+	EOPNOTSUPP = errors.New(syscall.EOPNOTSUPP.Error())
+	EPROTO = errors.New(syscall.EPROTO.Error())
+	ESOCKTNOSUPPORT = errors.New(syscall.ESOCKTNOSUPPORT.Error())
+)
+
 type ZmtpSession struct {
 	state    int
 	asserver int
@@ -53,19 +68,6 @@ type ZmtpMsg struct {
 	Data        []byte
 }
 
-var EBUSY = errors.New(syscall.EBUSY.Error())
-var ECONNREFUSED = errors.New(syscall.ECONNREFUSED.Error())
-var EINVAL = errors.New(syscall.EINVAL.Error())
-var EIO = errors.New(syscall.EIO.Error())
-var EMSGSIZE = errors.New(syscall.EMSGSIZE.Error())
-var ENOBUFS = errors.New(syscall.ENOBUFS.Error())
-var ENOLINK = errors.New(syscall.ENOLINK.Error())
-var ENOTCONN = errors.New(syscall.ENOTCONN.Error())
-var ENOTSUP = errors.New(syscall.ENOTSUP.Error())
-var EOPNOTSUPP = errors.New(syscall.EOPNOTSUPP.Error())
-var EPROTO = errors.New(syscall.EPROTO.Error())
-var ESOCKTNOSUPPORT = errors.New(syscall.ESOCKTNOSUPPORT.Error())
-
 func zmqCheckSocketWritable(sock string) bool {
 	switch sock {
 	case "REQ", "REP", "PUB", "PUSH", "PAIR":
@@ -81,7 +83,7 @@ func zmqCheckSocketReadable(sock string) bool {
 	switch sock {
 	case "REQ", "REP", "SUB", "PULL", "PAIR":
 		return true
-	case "PUB", "PUSH": // XXX PUB should be able to receive subscriptions
+	case "PUB", "PUSH":
 		return false
 	default:
 		return false
@@ -397,6 +399,8 @@ func (s *ZmtpSession) exchangeHandshakes() error {
 
 func sendFrame(conn net.Conn, data []byte, hasMore, isCommand bool) error {
 	var flags byte = 0
+	var hdr []byte
+	var buffer []byte
 
 	if hasMore && isCommand {
 		return EINVAL
@@ -410,8 +414,13 @@ func sendFrame(conn net.Conn, data []byte, hasMore, isCommand bool) error {
 		flags |= zmtpFlagsCommand
 	}
 
-	// TODO optimise to use big buffer slice and hdr sub slice
-	hdr := make([]byte, 9)
+	if len(data) == 0 {
+		buffer = make([]byte, 9)
+		hdr = buffer[:]
+	} else {
+		buffer = make([]byte, 9+len(data)+1)
+		hdr = buffer[0:10]
+	}
 
 	if len(data) > 0xFF {
 		flags |= zmtpFlagsLong
@@ -423,9 +432,8 @@ func sendFrame(conn net.Conn, data []byte, hasMore, isCommand bool) error {
 
 	hdr[0] = byte(flags)
 
-	buffer := make([]byte, len(hdr)+len(data))
-	copy(buffer, hdr)
 	copy(buffer[len(hdr):], data)
+	buffer = buffer[0:len(hdr)+len(data)]
 
 	_, err := conn.Write(buffer)
 	if err != nil {
