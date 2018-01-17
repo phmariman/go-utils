@@ -177,7 +177,6 @@ func sendGreeting(conn net.Conn) error {
 	greeting := make([]byte, 64)
 
 	greeting[0] = 0xFF
-	greeting[8] = 0x00
 	greeting[9] = 0x7F
 	greeting[10] = 0x03
 	greeting[11] = 0x00
