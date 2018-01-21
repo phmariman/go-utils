@@ -327,12 +327,15 @@ func deserializeCommand(d []byte) (cmdName string, cmdData []byte, err error) {
 }
 
 func sendHandshake(conn net.Conn, md map[string]string) error {
-	buffer, err := serializeCommand("READY", serializeMetadata(md))
+	var buf [1][]byte
+	var err error
+
+	buf[0], err = serializeCommand("READY", serializeMetadata(md))
 	if err != nil {
 		return err
 	}
 
-	err = sendFrame(conn, buffer, false, true)
+	err = sendFrame(conn, buf[:], true)
 	if err != nil {
 		return err
 	}
@@ -396,43 +399,57 @@ func (s *ZmtpSession) exchangeHandshakes() error {
 	return nil
 }
 
-func sendFrame(conn net.Conn, data []byte, hasMore, isCommand bool) error {
+func sendFrame(conn net.Conn, userdata [][]byte, isCommand bool) error {
 	var flags byte = 0
 	var hdr []byte
 	var buffer []byte
+	var buflen int
+	var offset int
+	var maxframes int
 
-	if hasMore && isCommand {
+	if isCommand && len(userdata) > 1 {
 		return EINVAL
 	}
 
-	if hasMore {
-		flags |= zmtpFlagsMore
+	for _, v := range userdata {
+		if len(v) == 0 {
+			buflen += 9
+		} else {
+			buflen += 9+len(v)+1
+		}
+
+		maxframes++
 	}
 
-	if isCommand {
-		flags |= zmtpFlagsCommand
+	buffer = make([]byte, buflen+1)
+
+	for i, v := range userdata {
+		flags = 0
+		if isCommand {
+			flags |= zmtpFlagsCommand
+		}
+
+		hdr = buffer[offset:offset+10]
+
+		if len(v) > 0xFF {
+			flags |= zmtpFlagsLong
+			binary.BigEndian.PutUint64(hdr[1:], uint64(len(v)))
+		} else {
+			hdr[1] = byte(len(v))
+			hdr = hdr[0:2]
+		}
+
+		if i < maxframes-1 {
+			flags |= zmtpFlagsMore
+		}
+
+		hdr[0] = byte(flags)
+
+		copy(buffer[offset+len(hdr):], v)
+		offset += len(hdr)+len(v)
 	}
 
-	if len(data) == 0 {
-		buffer = make([]byte, 9)
-		hdr = buffer[:]
-	} else {
-		buffer = make([]byte, 9+len(data)+1)
-		hdr = buffer[0:10]
-	}
-
-	if len(data) > 0xFF {
-		flags |= zmtpFlagsLong
-		binary.BigEndian.PutUint64(hdr[1:], uint64(len(data)))
-	} else {
-		hdr[1] = byte(len(data))
-		hdr = hdr[0:2]
-	}
-
-	hdr[0] = byte(flags)
-
-	copy(buffer[len(hdr):], data)
-	buffer = buffer[0:len(hdr)+len(data)]
+	buffer = buffer[0:offset]
 
 	_, err := conn.Write(buffer)
 	if err != nil {
@@ -564,7 +581,7 @@ func (s *ZmtpSession) ListenAndAccept(remote string) (*ZmtpSession, error) {
 	return nil, ENOTSUP
 }
 
-func (s *ZmtpSession) Write(buf []byte, hasMore bool) error {
+func (s *ZmtpSession) Write(buf [][]byte) error {
 	if s.state != zmtpStateConnected {
 		return ENOTCONN
 	}
@@ -573,7 +590,7 @@ func (s *ZmtpSession) Write(buf []byte, hasMore bool) error {
 		return EOPNOTSUPP
 	}
 
-	err := sendFrame(s.trans, buf, hasMore, false)
+	err := sendFrame(s.trans, buf, false)
 	if err != nil {
 		return err
 	}
