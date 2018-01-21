@@ -156,13 +156,13 @@ func decodeRemote(remote string) (scheme, host string, err error) {
 	return
 }
 
-func sessionConnectTCP(host string) (net.Conn, error) {
-	tcpAddr, err := net.ResolveTCPAddr("tcp4", host)
-	if err != nil {
-		return nil, err
+func sessionConnectTCP(network, host string) (net.Conn, error) {
+	d := net.Dialer{
+		Timeout: 5 * time.Second,
+		KeepAlive: 5 * time.Second,
 	}
 
-	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	conn, err := d.Dial(network, host)
 	if err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
 			err = ECONNREFUSED
@@ -522,7 +522,7 @@ func (s *ZmtpSession) Connect(remote string) error {
 		return ENOTSUP
 	}
 
-	s.trans, err = sessionConnectTCP(host)
+	s.trans, err = sessionConnectTCP(scheme, host)
 	if err != nil {
 		return err
 	}
