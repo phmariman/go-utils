@@ -34,33 +34,34 @@ const (
 )
 
 var (
-	EBUSY = errors.New(syscall.EBUSY.Error())
-	ECONNREFUSED = errors.New(syscall.ECONNREFUSED.Error())
-	EINVAL = errors.New(syscall.EINVAL.Error())
-	EIO = errors.New(syscall.EIO.Error())
-	EMSGSIZE = errors.New(syscall.EMSGSIZE.Error())
-	ENOBUFS = errors.New(syscall.ENOBUFS.Error())
-	ENOLINK = errors.New(syscall.ENOLINK.Error())
-	ENOTCONN = errors.New(syscall.ENOTCONN.Error())
-	ENOTSUP = errors.New(syscall.ENOTSUP.Error())
-	EOPNOTSUPP = errors.New(syscall.EOPNOTSUPP.Error())
-	EPROTO = errors.New(syscall.EPROTO.Error())
+	EBUSY           = errors.New(syscall.EBUSY.Error())
+	ECONNREFUSED    = errors.New(syscall.ECONNREFUSED.Error())
+	EINVAL          = errors.New(syscall.EINVAL.Error())
+	EIO             = errors.New(syscall.EIO.Error())
+	EMSGSIZE        = errors.New(syscall.EMSGSIZE.Error())
+	ENOBUFS         = errors.New(syscall.ENOBUFS.Error())
+	ENOLINK         = errors.New(syscall.ENOLINK.Error())
+	ENOTCONN        = errors.New(syscall.ENOTCONN.Error())
+	ENOTSUP         = errors.New(syscall.ENOTSUP.Error())
+	EOPNOTSUPP      = errors.New(syscall.EOPNOTSUPP.Error())
+	EPROTO          = errors.New(syscall.EPROTO.Error())
 	ESOCKTNOSUPPORT = errors.New(syscall.ESOCKTNOSUPPORT.Error())
 )
 
 type ZmtpSession struct {
-	state    int
-	asserver int
-	security int
-	network  string
-	address  string
-	socktype string
-	readable bool
-	writable bool
+	state     int
+	transport int
+	asserver  int
+	security  int
+	network   string
+	address   string
+	socktype  string
+	readable  bool
+	writable  bool
 	// TODO locking for usage between goroutines
 	mutex sync.Mutex
 	// generic connection interface for transports
-	trans net.Conn
+	conn net.Conn
 }
 
 type ZmtpMsg struct {
@@ -158,7 +159,7 @@ func decodeRemote(remote string) (scheme, host string, err error) {
 
 func sessionConnectTCP(network, host string) (net.Conn, error) {
 	d := net.Dialer{
-		Timeout: 5 * time.Second,
+		Timeout:   5 * time.Second,
 		KeepAlive: 5 * time.Second,
 	}
 
@@ -231,12 +232,12 @@ func recvGreeting(conn net.Conn) error {
 func (s *ZmtpSession) exchangeGreetings() error {
 	var err error
 
-	err = sendGreeting(s.trans)
+	err = sendGreeting(s.conn)
 	if err != nil {
 		return err
 	}
 
-	err = recvGreeting(s.trans)
+	err = recvGreeting(s.conn)
 	if err != nil {
 		return err
 	}
@@ -380,12 +381,12 @@ func (s *ZmtpSession) exchangeHandshakes() error {
 		"Socket-Type": s.socktype,
 	}
 
-	err = sendHandshake(s.trans, md)
+	err = sendHandshake(s.conn, md)
 	if err != nil {
 		return err
 	}
 
-	rmd, err := recvHandshake(s.trans)
+	rmd, err := recvHandshake(s.conn)
 	if err != nil {
 		return err
 	}
@@ -415,7 +416,7 @@ func sendFrame(conn net.Conn, userdata [][]byte, isCommand bool) error {
 		if len(v) == 0 {
 			buflen += 9
 		} else {
-			buflen += 9+len(v)+1
+			buflen += 9 + len(v) + 1
 		}
 
 		maxframes++
@@ -429,7 +430,7 @@ func sendFrame(conn net.Conn, userdata [][]byte, isCommand bool) error {
 			flags |= zmtpFlagsCommand
 		}
 
-		hdr = buffer[offset:offset+10]
+		hdr = buffer[offset : offset+10]
 
 		if len(v) > 0xFF {
 			flags |= zmtpFlagsLong
@@ -446,7 +447,7 @@ func sendFrame(conn net.Conn, userdata [][]byte, isCommand bool) error {
 		hdr[0] = byte(flags)
 
 		copy(buffer[offset+len(hdr):], v)
-		offset += len(hdr)+len(v)
+		offset += len(hdr) + len(v)
 	}
 
 	buffer = buffer[0:offset]
@@ -539,7 +540,7 @@ func (s *ZmtpSession) Connect(remote string) error {
 		return ENOTSUP
 	}
 
-	s.trans, err = sessionConnectTCP(scheme, host)
+	s.conn, err = sessionConnectTCP(scheme, host)
 	if err != nil {
 		return err
 	}
@@ -590,7 +591,7 @@ func (s *ZmtpSession) Write(buf [][]byte) error {
 		return EOPNOTSUPP
 	}
 
-	err := sendFrame(s.trans, buf, false)
+	err := sendFrame(s.conn, buf, false)
 	if err != nil {
 		return err
 	}
@@ -607,7 +608,7 @@ func (s *ZmtpSession) Read() ([]byte, bool, error) {
 		return nil, false, EOPNOTSUPP
 	}
 
-	data, hasMore, isCommand, err := receiveFrame(s.trans, 0)
+	data, hasMore, isCommand, err := receiveFrame(s.conn, 0)
 	if err != nil {
 		return nil, false, err
 	} else if isCommand {
@@ -627,14 +628,10 @@ func (s *ZmtpSession) Publish(topic string) error {
 }
 
 func (s *ZmtpSession) SetConnection(transport net.Conn) error {
-	var err error
-
-	s.trans = transport
+	s.conn = transport
 	s.state = zmtpStateSetup
-	//s.network = scheme
-	//s.address = host
 
-	err = s.exchangeGreetings()
+	err := s.exchangeGreetings()
 	if err != nil {
 		s.state = zmtpStateError
 		return err
