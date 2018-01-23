@@ -348,7 +348,7 @@ func recvHandshake(conn net.Conn) (map[string]string, error) {
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	defer conn.SetReadDeadline(time.Time{})
 
-	data, _, isCommand, err := receiveFrame(conn, 0)
+	data, isCommand, err := receiveFrame(conn, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -357,12 +357,14 @@ func recvHandshake(conn net.Conn) (map[string]string, error) {
 		return nil, EPROTO
 	}
 
-	name, msg, err := deserializeCommand(data)
+	name, msg, err := deserializeCommand(data[0])
 	if err != nil {
 		return nil, err
 	}
 
-	if name != "READY" {
+	if name == "ERROR" {
+		return nil, fmt.Errorf("protocol error: %s", string(msg))
+	} else if name != "READY" {
 		return nil, EPROTO
 	}
 
@@ -460,49 +462,63 @@ func sendFrame(conn net.Conn, userdata [][]byte, isCommand bool) error {
 	return nil
 }
 
-func receiveFrame(conn net.Conn, maxRead uint64) (data []byte, hasMore, isCommand bool, err error) {
+func receiveFrame(conn net.Conn, maxRead uint64) (buffer [][]byte, isCommand bool, err error) {
 	var dlen uint64
 	var flags byte
+	var hdr [9]byte
+	//var buffer [][]byte
 
-	hdr := make([]byte, 9)
-
-	_, err = io.ReadFull(conn, hdr[0:2])
-	if err != nil {
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			err = ENOLINK
-		}
-		return
-	}
-
-	flags = hdr[0]
-	hasMore = bool((flags & zmtpFlagsMore) > 1)
-	isCommand = bool((flags & zmtpFlagsCommand) > 1)
-
-	if hasMore && isCommand {
-		err = EINVAL
-		return
-	}
-
-	// check if long frame
-	if (flags & zmtpFlagsLong) != 0 {
-		_, err = io.ReadFull(conn, hdr[2:9])
+	for {
+		_, err = io.ReadFull(conn, hdr[0:2])
 		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				err = ENOLINK
+			}
 			return
-		} else {
-			dlen = binary.BigEndian.Uint64(hdr[1:])
 		}
-	} else {
-		dlen = uint64(hdr[1])
-	}
 
-	if maxRead != 0 && dlen > maxRead {
-		// TODO error mode
-		err = ENOBUFS
-		return
-	}
+		flags = hdr[0]
+		hasMore := bool((flags & zmtpFlagsMore) != 0)
+		isCommand = bool((flags & zmtpFlagsCommand) != 0)
 
-	data = make([]byte, dlen)
-	_, err = io.ReadFull(conn, data)
+		if hasMore && isCommand {
+			err = EINVAL
+			return
+		}
+
+		// check if long frame
+		if (flags & zmtpFlagsLong) != 0 {
+			_, err = io.ReadFull(conn, hdr[2:9])
+			if err != nil {
+				return
+			} else {
+				dlen = binary.BigEndian.Uint64(hdr[1:])
+			}
+		} else {
+			dlen = uint64(hdr[1])
+		}
+
+		if maxRead != 0 && dlen > maxRead {
+			// TODO error mode
+			err = ENOBUFS
+			return
+		}
+
+		data := make([]byte, dlen)
+		_, err = io.ReadFull(conn, data)
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				err = ENOLINK
+			}
+			return
+		}
+
+		buffer = append(buffer, data)
+
+		if !hasMore {
+			break
+		}
+	}
 
 	return
 }
@@ -599,24 +615,24 @@ func (s *ZmtpSession) Write(buf [][]byte) error {
 	return nil
 }
 
-func (s *ZmtpSession) Read() ([]byte, bool, error) {
+func (s *ZmtpSession) Read() ([][]byte, error) {
 	if s.state != zmtpStateConnected {
-		return nil, false, ENOTCONN
+		return nil, ENOTCONN
 	}
 
 	if !s.readable {
-		return nil, false, EOPNOTSUPP
+		return nil, EOPNOTSUPP
 	}
 
-	data, hasMore, isCommand, err := receiveFrame(s.conn, 0)
+	data, isCommand, err := receiveFrame(s.conn, 0)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	} else if isCommand {
 		// TODO fix and re-loop
-		return nil, false, fmt.Errorf("recv cmd frame")
+		return nil, fmt.Errorf("recv cmd frame")
 	}
 
-	return data, hasMore, nil
+	return data, nil
 }
 
 func (s *ZmtpSession) Subscribe(topic string) error {
