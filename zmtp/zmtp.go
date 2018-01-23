@@ -18,10 +18,16 @@ const (
 )
 
 const (
+	zmtpTransportNone int = iota
+	zmtpTransportZmq
+)
+
+const (
 	zmtpFlagsNone    byte = 0
 	zmtpFlagsMore         = 1 << 0
 	zmtpFlagsLong         = 1 << 1
 	zmtpFlagsCommand      = 1 << 2
+	zmtpFlagsNotUsed      = 0xFF ^ (zmtpFlagsMore | zmtpFlagsLong | zmtpFlagsCommand)
 )
 
 const (
@@ -478,6 +484,12 @@ func receiveFrame(conn net.Conn, maxRead uint64) (buffer [][]byte, isCommand boo
 		}
 
 		flags = hdr[0]
+
+		if (flags & zmtpFlagsNotUsed) != 0 {
+			err = ENOLINK
+			return
+		}
+
 		hasMore := bool((flags & zmtpFlagsMore) != 0)
 		isCommand = bool((flags & zmtpFlagsCommand) != 0)
 
@@ -536,12 +548,14 @@ func NewSession(security int, socktype string) (*ZmtpSession, error) {
 		s.socktype = socktype
 	}
 
+	s.transport = zmtpTransportZmq
 	s.writable = zmqCheckSocketWritable(socktype)
 	s.readable = zmqCheckSocketReadable(socktype)
 
 	return &s, nil
 }
 
+// TODO return control channel
 func (s *ZmtpSession) Connect(remote string) error {
 	if s.state != 0 {
 		return EBUSY
@@ -556,6 +570,7 @@ func (s *ZmtpSession) Connect(remote string) error {
 		return ENOTSUP
 	}
 
+	// TODO move to go routine
 	s.conn, err = sessionConnectTCP(scheme, host)
 	if err != nil {
 		return err
